@@ -14,6 +14,16 @@ class LinkedInCrawler(object):
     def __init__(self, login, password):
         self.login = login
         self.password = password
+        self.profile_ids = []
+        self.profile_creds = []
+        if os.path.isfile('profiles'):
+            with open('profiles', 'r') as f:
+                print "loading existing profiles..."
+                for line in f.readlines():
+                    profile_id = re.search('id=([0-9]+)', line).group(1)
+                    cred = line.strip()
+                    self.profile_ids.append(profile_id)
+                    self.profile_creds.append(cred)
 
         # SQLite
         self.conn = sqlite3.connect('lnkd.db')
@@ -29,12 +39,13 @@ class LinkedInCrawler(object):
             urllib2.HTTPCookieProcessor(self.cj)
         )
 
-	self.opener.addheaders = [
+        self.opener.addheaders = [
             ('User-agent', ('Mozilla/5.0 (Macintosh; '
                            'Intel Mac OS X 10_9_4) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/38.0.2125.111 Safari/537.36)'))
         ]
-        
-	self.loginPage()
+
+        self.loginPage()
+        #self.findProfiles()
         self.crawlProfiles()
         self.conn.close()
 
@@ -48,11 +59,11 @@ class LinkedInCrawler(object):
             return ''.join(response.readlines())
         except Exception as e:
             if retry_num < 3:
-		print 'retrying loadPage...'
+                print 'retrying loadPage...'
                 return self.loadPage(url, data, retry_num + 1)
             else:
-		print 'Unable to load url "%s" after 3 tries' % url
-               	raise
+                print 'Unable to load url "%s" after 3 tries' % url
+                raise
 
 
     def loginPage(self):
@@ -65,16 +76,16 @@ class LinkedInCrawler(object):
             'loginCsrfParam': csrf,
         })
         html = self.loadPage("https://www.linkedin.com/uas/login-submit", login_data)
-	soup = BeautifulSoup(html)
-	if soup.find(id='verification-code')['name'] == 'PinVerificationForm_pinParam':
-		post_data = {}
-		form = soup.find('form')
-		for hi in form.select('input[type=hidden]'):
-			post_data[hi['name']] = hi['value']
-		code = raw_input("Please enter your verification code: ")	
-		post_data['PinVerificationForm_pinParam'] = code
-		verification_data = urllib.urlencode(post_data)
-		html = self.loadPage("https://www.linkedin.com/uas/ato-pin-challenge-submit", verification_data)
+        soup = BeautifulSoup(html)
+        if soup.find(id='verification-code') is not None:
+            post_data = {}
+            form = soup.find('form')
+            for hi in form.select('input[type=hidden]'):
+                post_data[hi['name']] = hi['value']
+            code = raw_input("Please enter your verification code: ")
+            post_data['PinVerificationForm_pinParam'] = code
+            verification_data = urllib.urlencode(post_data)
+            html = self.loadPage("https://www.linkedin.com/uas/ato-pin-challenge-submit", verification_data)
 
     def createDb(self):
         c = self.conn.cursor()
@@ -83,21 +94,44 @@ class LinkedInCrawler(object):
         self.conn.commit()
         c.close()
 
+    def findProfiles(self, url=None):
+        start_link = 'https://www.linkedin.com/profile/view?id=5540529&authType=OPENLINK&authToken=CGIg&locale=en_US&srchid=3841868571415866237808&srchindex=22&srchtotal=255362&trk=vsrp_people_res_name&trkInfo=VSRPsearchId%3A3841868571415866237808%2CVSRPtargetId%3A5540529%2CVSRPcmpt%3Aprimary'
+        html = self.loadPage(url or start_link)
+        soup = BeautifulSoup(html)
+        similar_urls = [a['href'] for a in soup.find(class_='discovery-results').findAll('a')]
+        for surl in similar_urls:
+            if '/profile/view' in surl:
+                import re
+                profile_id = re.search('id=([0-9]+)', surl).group(1)
+                authType = ''
+                authToken = ''
+                try:
+                    authType = re.search('authType=([a-zA-Z_0-9]+)', surl).group(1)
+                    authToken = re.search('authToken=([a-zA-Z_0-9]+)', surl).group(1)
+                except:
+                    pass
+                if profile_id not in self.profile_ids:
+                    cred = 'id=%s&authType=%s&authToken=%s' % (profile_id, authType, authToken)
+                    self.profile_ids.append(profile_id)
+                    self.profile_creds.append(cred)
+                    with open('profiles', 'a+') as f:
+                        f.write(cred + '\n')
+                    print 'found url: %s' % cred
+        for surl in similar_urls:
+            self.findProfiles(surl)
 
     def crawlProfiles(self):
         successes = 0
         changes = 0
         failures = 0
         c = self.conn.cursor()
-        with open("%s/%s" % (os.path.dirname(os.path.realpath(__file__)), 'ids_to_check'), 'r') as f:
-            profile_ids = f.readlines()
-        for profile_id in profile_ids:
+        for cred in self.profile_creds:
+            profile = {}
             try:
-                profile_id = int(profile_id)
-                url = 'https://www.linkedin.com/profile/view?id=%d' % profile_id
+                profile_id = int(re.search('id=([0-9]+)', cred).group(1))
+                url = 'https://www.linkedin.com/profile/view?%s' % cred
                 html = self.loadPage(url)
                 soup = BeautifulSoup(html)
-                profile = {}
                 profile['url'] = unicode(url, 'utf-8')
                 profile['name'] = soup.select('.full-name')[0].get_text()
                 current_positions = soup.select('.background-experience div.current-position')
@@ -110,7 +144,12 @@ class LinkedInCrawler(object):
                     profile['location'] = soup.select('#location .locality')[0].get_text()
                     profile['title'] = current_position.select('header h4')[0].get_text()
                     profile['company'] = current_position.select('header h4')[0].nextSibling()[0].get_text()
-                    profile['description'] = current_position.select('.description')[0].get_text()
+                    description_el = current_position.select('.description')
+                    if len(description_el) == 0:
+                        # no description provided for the current position
+                        profile['description'] = ''
+                    else:
+                        profile['description'] = current_position.select('.description')[0].get_text()
 
                     # compare to last run
                     c.execute('SELECT * FROM profile WHERE profile_id = ?', (profile_id,))
@@ -143,7 +182,7 @@ class LinkedInCrawler(object):
 
                     successes += 1
             except Exception as e:
-		import traceback
+                import traceback
                 failures += 1
                 print 'profile %d - %s: failed' % (profile_id, profile['name'] if 'name' in profile else 'unknown')
                 print "Exception: %s, Trace: %s" % (e, traceback.format_exc())
