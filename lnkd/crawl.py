@@ -123,9 +123,9 @@ class LinkedInCrawler(object):
                     with open('profiles', 'a+') as f:
                         f.write(cred + '\n')
                     print 'found url: %s' % cred
-            self._delay()
             for surl in similar_urls:
                 self.crawlProfile(surl, depth + 1)
+        self._delay()
 
     def crawlProfiles(self):
         successes = 0
