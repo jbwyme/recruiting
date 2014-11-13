@@ -102,6 +102,7 @@ class LinkedInCrawler(object):
         print 'crawling "%s" at depth %d' % (url, depth)
         profile_id = int(re.search('id=([0-9]+)', url).group(1))
         html = self.loadPage(url)
+        self._delay()
         self._saveProfile(profile_id, url, html)
         soup = BeautifulSoup(html)
         discovery_results = soup.find(class_='discovery-results')
@@ -125,7 +126,6 @@ class LinkedInCrawler(object):
                     print 'found url: %s' % cred
             for surl in similar_urls:
                 self.crawlProfile(surl, depth + 1)
-        self._delay()
 
     def crawlProfiles(self):
         successes = 0
