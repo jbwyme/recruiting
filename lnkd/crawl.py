@@ -28,12 +28,13 @@ class LinkedInCrawler(object):
             urllib2.HTTPSHandler(debuglevel=0),
             urllib2.HTTPCookieProcessor(self.cj)
         )
-        self.opener.addheaders = [
-            ('User-agent', ('Mozilla/4.0 (compatible; MSIE 6.0; '
-                           'Windows NT 5.2; .NET CLR 1.1.4322)'))
-        ]
 
-        self.loginPage()
+	self.opener.addheaders = [
+            ('User-agent', ('Mozilla/5.0 (Macintosh; '
+                           'Intel Mac OS X 10_9_4) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/38.0.2125.111 Safari/537.36)'))
+        ]
+        
+	self.loginPage()
         self.crawlProfiles()
         self.conn.close()
 
@@ -45,11 +46,13 @@ class LinkedInCrawler(object):
             else:
                 response = self.opener.open(url)
             return ''.join(response.readlines())
-        except:
+        except Exception as e:
             if retry_num < 3:
+		print 'retrying loadPage...'
                 return self.loadPage(url, data, retry_num + 1)
             else:
-               raise Exception('Unable to load url "%s" after 3 tries')
+		print 'Unable to load url "%s" after 3 tries' % url
+               	raise
 
 
     def loginPage(self):
@@ -62,13 +65,16 @@ class LinkedInCrawler(object):
             'loginCsrfParam': csrf,
         })
         html = self.loadPage("https://www.linkedin.com/uas/login-submit", login_data)
-
-
-    def loadTitle(self):
-        html = self.loadPage("http://www.linkedin.com/nhome")
-        soup = BeautifulSoup(html)
-        return soup.find("title")
-
+	soup = BeautifulSoup(html)
+	if soup.find(id='verification-code')['name'] == 'PinVerificationForm_pinParam':
+		post_data = {}
+		form = soup.find('form')
+		for hi in form.select('input[type=hidden]'):
+			post_data[hi['name']] = hi['value']
+		code = raw_input("Please enter your verification code: ")	
+		post_data['PinVerificationForm_pinParam'] = code
+		verification_data = urllib.urlencode(post_data)
+		html = self.loadPage("https://www.linkedin.com/uas/ato-pin-challenge-submit", verification_data)
 
     def createDb(self):
         c = self.conn.cursor()
@@ -137,9 +143,10 @@ class LinkedInCrawler(object):
 
                     successes += 1
             except Exception as e:
+		import traceback
                 failures += 1
-                print 'profile %d - %s: failed' % (profile_id, profile['name'])
-                print "Exception: {0}".format(e)
+                print 'profile %d - %s: failed' % (profile_id, profile['name'] if 'name' in profile else 'unknown')
+                print "Exception: %s, Trace: %s" % (e, traceback.format_exc())
 
         print 'successes: %d, changes: %d, failures %d' % (successes, changes, failures)
         c.close()
