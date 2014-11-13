@@ -125,7 +125,7 @@ class LinkedInCrawler(object):
         self._saveProfile(profile_id, url, html)
         soup = BeautifulSoup(html)
         discovery_results = soup.find(class_='discovery-results')
-        if len(self.all_profile_ids) >= 10000 discovery_results is not None:
+        if len(self.all_profile_ids) <= 10000 and discovery_results is not None:
             similar_profiles = [a['href'] for a in discovery_results.findAll('a') if '/profile/view' in a['href']]
             for profile_url in similar_profiles:
                 profile_id = int(re.search('id=([0-9]+)', profile_url).group(1))
