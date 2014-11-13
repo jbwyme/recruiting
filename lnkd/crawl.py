@@ -14,10 +14,8 @@ import urllib2
 
 class LinkedInCrawler(object):
 
-    def __init__(self, login, password):
+    def __init__(self):
         self.crawls_per_run = 100
-        self.login = login
-        self.password = password
         self.all_profile_ids = []
         self.cred_queue = []
 
@@ -99,8 +97,8 @@ class LinkedInCrawler(object):
         soup = BeautifulSoup(html)
         csrf = soup.find(id="loginCsrfParam-login")['value']
         login_data = urllib.urlencode({
-            'session_key': self.login,
-            'session_password': self.password,
+            'session_key': config.LINKEDIN_EMAIL,
+            'session_password': config.LINKEDIN_PASSWORD,
             'loginCsrfParam': csrf,
         })
         html = self._loadPage("https://www.linkedin.com/uas/login-submit", login_data)
@@ -223,4 +221,4 @@ class LinkedInCrawler(object):
         print 'waiting %d seconds...' % delay
         time.sleep(delay) # random delay
 
-parser = LinkedInCrawler(config.LINKEDIN_EMAIL, config.LINKEDIN_PASSWORD)
+parser = LinkedInCrawler()
