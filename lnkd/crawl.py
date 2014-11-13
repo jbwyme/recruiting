@@ -12,7 +12,6 @@ import urllib2
 class LinkedInCrawler(object):
 
     def __init__(self, login, password):
-        """ Start up... """
         self.login = login
         self.password = password
 
