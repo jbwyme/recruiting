@@ -20,6 +20,7 @@ class LinkedInCrawler(object):
         self.password = password
         self.all_profile_ids = []
         self.cred_queue = []
+
         # lock and grab top n profiles to crawl
         if not os.path.isfile('.crawl.lck'):
             with open('.crawl.lck', 'a'):
@@ -30,7 +31,6 @@ class LinkedInCrawler(object):
             if os.path.isfile('queue'):
                 os.rename('queue', 'queue.old')
                 with open('queue.old', 'r') as f:
-                    print "loading existing profiles..."
                     line_num = 0
                     with open('queue', 'w+') as f2:
                         for line in f.readlines():
@@ -54,7 +54,11 @@ class LinkedInCrawler(object):
             # SQLite
             self.conn = sqlite3.connect('lnkd.db')
             self.conn.row_factory = sqlite3.Row
-            self.createDb()
+            c = self.conn.cursor()
+            c.execute('''CREATE TABLE IF NOT EXISTS profile
+                         (profile_id real PRIMARY KEY, name text, location text, title text, company text, description text, url text, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, last_crawled_at DATETIME, updated_at DATETIME)''')
+            self.conn.commit()
+            c.close()
 
             # Simulate browser with cookies enabled
             self.cj = cookielib.MozillaCookieJar('parser.cookie.txt')
@@ -71,14 +75,12 @@ class LinkedInCrawler(object):
             ]
 
             self.loginPage()
-            print self.cred_queue
+            print '%d profiles have been queued for crawling' % len(self.cred_queue)
             for cred in self.cred_queue[:]:
                 with open('queue', 'a+') as f:
                     f.write(cred + '\n')
                 self.cred_queue.remove(cred)
                 self.crawlProfile(cred)
-
-            #self.crawlProfiles()
             self.conn.close()
         except:
             print 'writing pending buffer (%d profiles) to persistent queue' % len(self.cred_queue)
@@ -124,14 +126,6 @@ class LinkedInCrawler(object):
             post_data['PinVerificationForm_pinParam'] = code
             verification_data = urllib.urlencode(post_data)
             html = self.loadPage("https://www.linkedin.com/uas/ato-pin-challenge-submit", verification_data)
-
-
-    def createDb(self):
-        c = self.conn.cursor()
-        c.execute('''CREATE TABLE IF NOT EXISTS profile
-                     (profile_id real PRIMARY KEY, name text, location text, title text, company text, description text, url text, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, last_crawled_at DATETIME, updated_at DATETIME)''')
-        self.conn.commit()
-        c.close()
 
 
     def crawlProfile(self, cred=None):
@@ -191,7 +185,7 @@ class LinkedInCrawler(object):
 
                 # e-mail if the description changed
                 if description_changed:
-                    self._sendMail("Job description changed for %s" % profile['name'].encode('utf-8'), 
+                    self._sendMail("Job description changed for %s" % profile['name'].encode('utf-8'),
                         'url: %s\n\nold:\n---------\n%s\n\nnew:\n---------\n%s' % (url, saved_profile['description'].encode('utf-8'), profile['description'].encode('utf-8')))
 
                 # save profile to db
