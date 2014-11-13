@@ -102,24 +102,26 @@ class LinkedInCrawler(object):
         html = self.loadPage(url)
         self._saveProfile(profile_id, url, html)
         soup = BeautifulSoup(html)
-        similar_urls = [a['href'] for a in soup.find(class_='discovery-results').findAll('a')]
-        for surl in similar_urls:
-            if '/profile/view' in surl:
-                profile_id = re.search('id=([0-9]+)', surl).group(1)
-                authType = ''
-                authToken = ''
-                try:
-                    authType = re.search('authType=([a-zA-Z_0-9]+)', surl).group(1)
-                    authToken = re.search('authToken=([a-zA-Z_0-9]+)', surl).group(1)
-                except:
-                    pass
-                if profile_id not in self.profile_ids:
-                    cred = 'id=%s&authType=%s&authToken=%s' % (profile_id, authType, authToken)
-                    self.profile_ids.append(profile_id)
-                    self.profile_creds.append(cred)
-                    with open('profiles', 'a+') as f:
-                        f.write(cred + '\n')
-                    print 'found url: %s' % cred
+        discovery_results = soup.find(class_='discovery-results')
+        if discovery_results is not None:
+            similar_urls = [a['href'] for a in discovery_results.findAll('a')]
+            for surl in similar_urls:
+                if '/profile/view' in surl:
+                    profile_id = re.search('id=([0-9]+)', surl).group(1)
+                    authType = ''
+                    authToken = ''
+                    try:
+                        authType = re.search('authType=([a-zA-Z_0-9]+)', surl).group(1)
+                        authToken = re.search('authToken=([a-zA-Z_0-9]+)', surl).group(1)
+                    except:
+                        pass
+                    if profile_id not in self.profile_ids:
+                        cred = 'id=%s&authType=%s&authToken=%s' % (profile_id, authType, authToken)
+                        self.profile_ids.append(profile_id)
+                        self.profile_creds.append(cred)
+                        with open('profiles', 'a+') as f:
+                            f.write(cred + '\n')
+                        print 'found url: %s' % cred
         self._delay()
         for surl in similar_urls:
             self.findProfiles(surl)
