@@ -77,7 +77,8 @@ class LinkedInCrawler(object):
             self.login()
 
             # crawl queued batch
-            print '%d profiles have been queued for crawling' % len(self.cred_queue)
+            if self.debug:
+                print '%d profiles have been queued for crawling' % len(self.cred_queue)
             for cred in self.cred_queue[:]:
                 with open('queue', 'a+') as f:
                     f.write(cred + '\n')
