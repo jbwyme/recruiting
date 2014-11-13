@@ -15,6 +15,7 @@ import urllib2
 class LinkedInCrawler(object):
 
     def __init__(self):
+        self.debug = False
         self.crawls_per_run = 100
         self.all_profile_ids = []
         self.cred_queue = []
@@ -117,13 +118,14 @@ class LinkedInCrawler(object):
 
     def crawlProfile(self, cred=None):
         url = 'https://www.linkedin.com/profile/view?%s' % cred if cred else 'id=48265010&authType=name&authToken=P42Z'
-        print 'crawling "%s"' % url
+        if self.debug:
+            print 'crawling "%s"' % url
         profile_id = int(re.search('id=([0-9]+)', url).group(1))
         html = self._loadPage(url)
         self._saveProfile(profile_id, url, html)
         soup = BeautifulSoup(html)
         discovery_results = soup.find(class_='discovery-results')
-        if discovery_results is not None:
+        if len(self.all_profile_ids) >= 10000 discovery_results is not None:
             similar_profiles = [a['href'] for a in discovery_results.findAll('a') if '/profile/view' in a['href']]
             for profile_url in similar_profiles:
                 profile_id = int(re.search('id=([0-9]+)', profile_url).group(1))
@@ -139,7 +141,8 @@ class LinkedInCrawler(object):
                     self.all_profile_ids.append(profile_id)
                     with open('queue', 'a+') as f:
                         f.write(cred + '\n')
-                    print 'adding profile to crawl: %s' % cred
+                    if self.debug:
+                        print 'adding profile to crawl: %s' % cred
         self._delay()
 
     def _loadPage(self, url, data=None, retry_num=0):
@@ -217,7 +220,8 @@ class LinkedInCrawler(object):
 
     def _delay(self):
         delay = random.randrange(2,10,1)
-        print 'waiting %d seconds...' % delay
+        if self.debug:
+            print 'waiting %d seconds...' % delay
         time.sleep(delay) # random delay
 
 parser = LinkedInCrawler()
