@@ -120,7 +120,6 @@ class LinkedInCrawler(object):
         print 'crawling "%s"' % url
         profile_id = int(re.search('id=([0-9]+)', url).group(1))
         html = self._loadPage(url)
-        self._delay()
         self._saveProfile(profile_id, url, html)
         soup = BeautifulSoup(html)
         discovery_results = soup.find(class_='discovery-results')
@@ -141,7 +140,7 @@ class LinkedInCrawler(object):
                     with open('queue', 'a+') as f:
                         f.write(cred + '\n')
                     print 'adding profile to crawl: %s' % cred
-
+        self._delay()
 
     def _loadPage(self, url, data=None, retry_num=0):
         try:
