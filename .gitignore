@@ -1,4 +1,4 @@
 *.pyc
 lnkd/config.py
 lnkd/lnkd.db
-lnkd/parser.cookies.txt
+lnkd/.crawl.lck
