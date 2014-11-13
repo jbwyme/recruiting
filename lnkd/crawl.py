@@ -1,15 +1,13 @@
+from bs4 import BeautifulSoup
 import config
 import cookielib
 import os
-import urllib
-import urllib2
 import re
 import smtplib
-import string
 import sqlite3
-from bs4 import BeautifulSoup
-
-cookie_filename = "parser.cookies.txt"
+import string
+import urllib
+import urllib2
 
 class LinkedInCrawler(object):
 
@@ -24,7 +22,7 @@ class LinkedInCrawler(object):
         self.createDb()
 
         # Simulate browser with cookies enabled
-        self.cj = cookielib.MozillaCookieJar(cookie_filename)
+        self.cj = cookielib.MozillaCookieJar('parser.cookie.txt')
         self.opener = urllib2.build_opener(
             urllib2.HTTPRedirectHandler(),
             urllib2.HTTPHandler(debuglevel=0),
@@ -41,12 +39,7 @@ class LinkedInCrawler(object):
         self.conn.close()
 
 
-    def loadPage(self, url, data=None):
-        """
-        Utility function to load HTML from URLs for us with hack to continue despite 404
-        """
-        # We'll print the url in case of infinite loop
-        # print "Loading URL: %s" % url
+    def loadPage(self, url, data=None, retry_num=0):
         try:
             if data is not None:
                 response = self.opener.open(url, data)
@@ -54,28 +47,22 @@ class LinkedInCrawler(object):
                 response = self.opener.open(url)
             return ''.join(response.readlines())
         except:
-            # If URL doesn't load for ANY reason, try again...
-            # Quick and dirty solution for 404 returns because of network problems
-            # However, this could infinite loop if there's an actual problem
-            return self.loadPage(url, data)
+            if retry_num < 3:
+                return self.loadPage(url, data, retry_num + 1)
+            else:
+               raise Exception('Unable to load url "%s" after 3 tries')
 
 
     def loginPage(self):
-        """
-        Handle login. This should populate our cookie jar.
-        """
         html = self.loadPage("https://www.linkedin.com/")
         soup = BeautifulSoup(html)
         csrf = soup.find(id="loginCsrfParam-login")['value']
-
         login_data = urllib.urlencode({
             'session_key': self.login,
             'session_password': self.password,
             'loginCsrfParam': csrf,
         })
-
         html = self.loadPage("https://www.linkedin.com/uas/login-submit", login_data)
-        return
 
 
     def loadTitle(self):
