@@ -2,10 +2,12 @@ from bs4 import BeautifulSoup
 import config
 import cookielib
 import os
+import random
 import re
 import smtplib
 import sqlite3
 import string
+import time
 import urllib
 import urllib2
 
@@ -45,8 +47,8 @@ class LinkedInCrawler(object):
         ]
 
         self.loginPage()
-        #self.findProfiles()
-        self.crawlProfiles()
+        self.findProfiles()
+        #self.crawlProfiles()
         self.conn.close()
 
 
@@ -95,13 +97,14 @@ class LinkedInCrawler(object):
         c.close()
 
     def findProfiles(self, url=None):
-        start_link = 'https://www.linkedin.com/profile/view?id=5540529&authType=OPENLINK&authToken=CGIg&locale=en_US&srchid=3841868571415866237808&srchindex=22&srchtotal=255362&trk=vsrp_people_res_name&trkInfo=VSRPsearchId%3A3841868571415866237808%2CVSRPtargetId%3A5540529%2CVSRPcmpt%3Aprimary'
-        html = self.loadPage(url or start_link)
+        url = url or 'https://www.linkedin.com/profile/view?id=39163401&authType=name&authToken=GoOL&offset=5&trk=prof-sb-pdm-similar-photo'
+        profile_id = int(re.search('id=([0-9]+)', url).group(1))
+        html = self.loadPage(url)
+        self._saveProfile(profile_id, url, html)
         soup = BeautifulSoup(html)
         similar_urls = [a['href'] for a in soup.find(class_='discovery-results').findAll('a')]
         for surl in similar_urls:
             if '/profile/view' in surl:
-                import re
                 profile_id = re.search('id=([0-9]+)', surl).group(1)
                 authType = ''
                 authToken = ''
@@ -117,77 +120,85 @@ class LinkedInCrawler(object):
                     with open('profiles', 'a+') as f:
                         f.write(cred + '\n')
                     print 'found url: %s' % cred
+        self._delay()
         for surl in similar_urls:
             self.findProfiles(surl)
 
     def crawlProfiles(self):
         successes = 0
-        changes = 0
         failures = 0
-        c = self.conn.cursor()
         for cred in self.profile_creds:
-            profile = {}
             try:
                 profile_id = int(re.search('id=([0-9]+)', cred).group(1))
                 url = 'https://www.linkedin.com/profile/view?%s' % cred
                 html = self.loadPage(url)
-                soup = BeautifulSoup(html)
-                profile['url'] = unicode(url, 'utf-8')
-                profile['name'] = soup.select('.full-name')[0].get_text()
-                current_positions = soup.select('.background-experience div.current-position')
-                if len(current_positions) == 0:
-                    failures += 1
-                    print 'profile %d - %s: Unable to find any current positions... profile may not be viewable: %s' % (profile_id, profile['name'], url)
-                else:
-                    # parse current position information
-                    current_position = current_positions[0]
-                    profile['location'] = soup.select('#location .locality')[0].get_text()
-                    profile['title'] = current_position.select('header h4')[0].get_text()
-                    profile['company'] = current_position.select('header h4')[0].nextSibling()[0].get_text()
-                    description_el = current_position.select('.description')
-                    if len(description_el) == 0:
-                        # no description provided for the current position
-                        profile['description'] = ''
-                    else:
-                        profile['description'] = current_position.select('.description')[0].get_text()
-
-                    # compare to last run
-                    c.execute('SELECT * FROM profile WHERE profile_id = ?', (profile_id,))
-                    saved_profile = c.fetchone()
-                    description_changed = saved_profile is not None and saved_profile['description'] != profile['description']
-
-                    # e-mail if the description changed
-                    if description_changed:
-                        changes += 1
-                        FROM = "jbwyme@gmail.com"
-                        TO = ["josh@mixpanel.com"]
-                        SUBJECT = "Job description changed for %s" % profile['name'].encode('utf-8')
-                        TEXT = 'url: %s\n\nold:\n---------\n%s\n\nnew:\n---------\n%s' % (url, saved_profile['description'].encode('utf-8'), profile['description'].encode('utf-8'))
-                        message = "From: %s\r\nTo: %s\r\nSubject: %s\r\n\r\n%s" % (FROM, ",".join(TO), SUBJECT, TEXT)
-                        server = smtplib.SMTP('smtp.gmail.com',587) # port 465 or 587
-                        server.ehlo()
-                        server.starttls()
-                        server.ehlo()
-                        server.login(config.GMAIL_EMAIL, config.GMAIL_PASSWORD)
-                        server.sendmail(FROM, TO, message)
-                        server.close()
-
-                    # save profile to db
-                    if saved_profile is None or description_changed:
-                        c.execute("INSERT OR IGNORE INTO profile (profile_id, name, url) VALUES (?, ?, ?)", (profile_id, profile['name'], url))
-                        c.execute("UPDATE profile SET location = ?, title = ?, company = ?, description = ?, updated_at = CURRENT_TIMESTAMP WHERE profile_id = ?",
-                            (profile['location'], profile['title'], profile['company'], profile['description'], profile_id,))
-                        self.conn.commit()
-                        print 'profile %d - %s: profile %s' % (profile_id, profile['name'], 'updated' if description_changed else 'added')
-
-                    successes += 1
+                self._saveProfile(profile_id, url, html)
+                successes += 1
             except Exception as e:
                 import traceback
                 failures += 1
                 print 'profile %d - %s: failed' % (profile_id, profile['name'] if 'name' in profile else 'unknown')
                 print "Exception: %s, Trace: %s" % (e, traceback.format_exc())
 
+            self._delay()
+
         print 'successes: %d, changes: %d, failures %d' % (successes, changes, failures)
+
+    def _saveProfile(self, profile_id, url, html):
+        soup = BeautifulSoup(html)
+        c = self.conn.cursor()
+        profile = {}
+        profile['url'] = unicode(url, 'utf-8')
+        profile['name'] = soup.select('.full-name')[0].get_text()
+        current_positions = soup.select('.background-experience div.current-position')
+        if len(current_positions) == 0:
+            print 'profile %d - %s: Unable to find any current positions... profile may not be viewable: %s' % (profile_id, profile['name'], url)
+        else:
+            # parse current position information
+            current_position = current_positions[0]
+            profile['location'] = soup.select('#location .locality')[0].get_text()
+            profile['title'] = current_position.select('header h4')[0].get_text()
+            profile['company'] = current_position.select('header h4')[0].nextSibling()[0].get_text()
+            description_el = current_position.select('.description')
+            if len(description_el) == 0:
+                # no description provided for the current position
+                profile['description'] = ''
+            else:
+                profile['description'] = current_position.select('.description')[0].get_text()
+
+        # compare to last run
+        c.execute('SELECT * FROM profile WHERE profile_id = ?', (profile_id,))
+        saved_profile = c.fetchone()
+        description_changed = saved_profile is not None and saved_profile['description'] != profile['description']
+
+        # e-mail if the description changed
+        if description_changed:
+            FROM = "jbwyme@gmail.com"
+            TO = ["josh@mixpanel.com"]
+            SUBJECT = "Job description changed for %s" % profile['name'].encode('utf-8')
+            TEXT = 'url: %s\n\nold:\n---------\n%s\n\nnew:\n---------\n%s' % (url, saved_profile['description'].encode('utf-8'), profile['description'].encode('utf-8'))
+            message = "From: %s\r\nTo: %s\r\nSubject: %s\r\n\r\n%s" % (FROM, ",".join(TO), SUBJECT, TEXT)
+            server = smtplib.SMTP('smtp.gmail.com',587) # port 465 or 587
+            server.ehlo()
+            server.starttls()
+            server.ehlo()
+            server.login(config.GMAIL_EMAIL, config.GMAIL_PASSWORD)
+            server.sendmail(FROM, TO, message)
+            server.close()
+
+        # save profile to db
+        if saved_profile is None or description_changed:
+            c.execute("INSERT OR IGNORE INTO profile (profile_id, name, url) VALUES (?, ?, ?)", (profile_id, profile['name'], url))
+            c.execute("UPDATE profile SET location = ?, title = ?, company = ?, description = ?, updated_at = CURRENT_TIMESTAMP WHERE profile_id = ?",
+                (profile['location'], profile['title'], profile['company'], profile['description'], profile_id,))
+            self.conn.commit()
+            print 'profile %d - %s: profile %s' % (profile_id, profile['name'], 'updated' if description_changed else 'added')
         c.close()
+
+
+    def _delay(self):
+        delay = random.randrange(5,30,1)
+        print 'waiting %d seconds...' % delay
+        time.sleep(delay) # random delay
 
 parser = LinkedInCrawler(config.LINKEDIN_EMAIL, config.LINKEDIN_PASSWORD)
