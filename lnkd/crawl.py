@@ -74,39 +74,28 @@ class LinkedInCrawler(object):
                                'Intel Mac OS X 10_9_4) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/38.0.2125.111 Safari/537.36)'))
             ]
 
-            self.loginPage()
+            # login to linkedin
+            self.login()
+
+            # crawl queued batch
             print '%d profiles have been queued for crawling' % len(self.cred_queue)
             for cred in self.cred_queue[:]:
                 with open('queue', 'a+') as f:
                     f.write(cred + '\n')
                 self.cred_queue.remove(cred)
                 self.crawlProfile(cred)
-            self.conn.close()
         except:
             print 'writing pending buffer (%d profiles) to persistent queue' % len(self.cred_queue)
             for cred in self.cred_queue:
                 with open('queue', 'a+') as f:
                     f.write(cred + '\n')
             raise
-
-    def loadPage(self, url, data=None, retry_num=0):
-        try:
-            if data is not None:
-                response = self.opener.open(url, data)
-            else:
-                response = self.opener.open(url)
-            return ''.join(response.readlines())
-        except Exception as e:
-            if retry_num < 3:
-                print 'retrying loadPage...'
-                return self.loadPage(url, data, retry_num + 1)
-            else:
-                print 'Unable to load url "%s" after 3 tries' % url
-                raise
+        finally:
+            self.conn.close()
 
 
-    def loginPage(self):
-        html = self.loadPage("https://www.linkedin.com/")
+    def login(self):
+        html = self._loadPage("https://www.linkedin.com/")
         soup = BeautifulSoup(html)
         csrf = soup.find(id="loginCsrfParam-login")['value']
         login_data = urllib.urlencode({
@@ -114,7 +103,7 @@ class LinkedInCrawler(object):
             'session_password': self.password,
             'loginCsrfParam': csrf,
         })
-        html = self.loadPage("https://www.linkedin.com/uas/login-submit", login_data)
+        html = self._loadPage("https://www.linkedin.com/uas/login-submit", login_data)
         soup = BeautifulSoup(html)
         if soup.find(id='verification-code') is not None:
             post_data = {}
@@ -125,14 +114,14 @@ class LinkedInCrawler(object):
             code = raw_input("Please enter your verification code: ")
             post_data['PinVerificationForm_pinParam'] = code
             verification_data = urllib.urlencode(post_data)
-            html = self.loadPage("https://www.linkedin.com/uas/ato-pin-challenge-submit", verification_data)
+            html = self._loadPage("https://www.linkedin.com/uas/ato-pin-challenge-submit", verification_data)
 
 
     def crawlProfile(self, cred=None):
         url = 'https://www.linkedin.com/profile/view?%s' % cred if cred else 'id=48265010&authType=name&authToken=P42Z'
         print 'crawling "%s"' % url
         profile_id = int(re.search('id=([0-9]+)', url).group(1))
-        html = self.loadPage(url)
+        html = self._loadPage(url)
         self._delay()
         self._saveProfile(profile_id, url, html)
         soup = BeautifulSoup(html)
@@ -151,9 +140,25 @@ class LinkedInCrawler(object):
                 if profile_id not in self.all_profile_ids:
                     cred = 'id=%s&authType=%s&authToken=%s' % (profile_id, authType, authToken)
                     self.all_profile_ids.append(profile_id)
-                    with open('profiles', 'a+') as f:
+                    with open('queue', 'a+') as f:
                         f.write(cred + '\n')
                     print 'adding profile to crawl: %s' % cred
+
+
+    def _loadPage(self, url, data=None, retry_num=0):
+        try:
+            if data is not None:
+                response = self.opener.open(url, data)
+            else:
+                response = self.opener.open(url)
+            return ''.join(response.readlines())
+        except Exception as e:
+            if retry_num < 3:
+                print 'retrying loadPage...'
+                return self._loadPage(url, data, retry_num + 1)
+            else:
+                print 'Unable to load url "%s" after 3 tries' % url
+                raise
 
 
     def _saveProfile(self, profile_id, url, html):
