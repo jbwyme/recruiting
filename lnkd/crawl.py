@@ -14,6 +14,7 @@ import urllib2
 class LinkedInCrawler(object):
 
     def __init__(self, login, password):
+        self.MAX_CRAWL_DEPTH = 5
         self.login = login
         self.password = password
         self.profile_ids = []
@@ -47,7 +48,7 @@ class LinkedInCrawler(object):
         ]
 
         self.loginPage()
-        self.findProfiles()
+        self.crawlProfile()
         #self.crawlProfiles()
         self.conn.close()
 
@@ -96,35 +97,35 @@ class LinkedInCrawler(object):
         self.conn.commit()
         c.close()
 
-    def findProfiles(self, url=None):
-        url = url or 'https://www.linkedin.com/profile/view?id=39163401&authType=name&authToken=GoOL&offset=5&trk=prof-sb-pdm-similar-photo'
+    def crawlProfile(self, url=None, depth=0):
+        url = url or 'https://www.linkedin.com/profile/view?id=48265010&authType=name&authToken=P42Z&offset=23&trk=prof-sb-pdm-similar-photo'
+        print 'crawling "%s" at depth %d' % (url, depth)
         profile_id = int(re.search('id=([0-9]+)', url).group(1))
         html = self.loadPage(url)
         self._saveProfile(profile_id, url, html)
         soup = BeautifulSoup(html)
         discovery_results = soup.find(class_='discovery-results')
-        if discovery_results is not None:
-            similar_urls = [a['href'] for a in discovery_results.findAll('a')]
+        if depth < self.MAX_CRAWL_DEPTH and discovery_results is not None:
+            similar_urls = [a['href'] for a in discovery_results.findAll('a') if '/profile/view' in a['href']]
             for surl in similar_urls:
-                if '/profile/view' in surl:
-                    profile_id = re.search('id=([0-9]+)', surl).group(1)
-                    authType = ''
-                    authToken = ''
-                    try:
-                        authType = re.search('authType=([a-zA-Z_0-9]+)', surl).group(1)
-                        authToken = re.search('authToken=([a-zA-Z_0-9]+)', surl).group(1)
-                    except:
-                        pass
-                    if profile_id not in self.profile_ids:
-                        cred = 'id=%s&authType=%s&authToken=%s' % (profile_id, authType, authToken)
-                        self.profile_ids.append(profile_id)
-                        self.profile_creds.append(cred)
-                        with open('profiles', 'a+') as f:
-                            f.write(cred + '\n')
-                        print 'found url: %s' % cred
-        self._delay()
-        for surl in similar_urls:
-            self.findProfiles(surl)
+                profile_id = re.search('id=([0-9]+)', surl).group(1)
+                authType = ''
+                authToken = ''
+                try:
+                    authType = re.search('authType=([a-zA-Z_0-9]+)', surl).group(1)
+                    authToken = re.search('authToken=([a-zA-Z_0-9]+)', surl).group(1)
+                except:
+                    pass
+                if profile_id not in self.profile_ids:
+                    cred = 'id=%s&authType=%s&authToken=%s' % (profile_id, authType, authToken)
+                    self.profile_ids.append(profile_id)
+                    self.profile_creds.append(cred)
+                    with open('profiles', 'a+') as f:
+                        f.write(cred + '\n')
+                    print 'found url: %s' % cred
+            self._delay()
+            for surl in similar_urls:
+                self.crawlProfile(surl, depth + 1)
 
     def crawlProfiles(self):
         successes = 0
@@ -191,15 +192,15 @@ class LinkedInCrawler(object):
         # save profile to db
         if saved_profile is None or description_changed:
             c.execute("INSERT OR IGNORE INTO profile (profile_id, name, url) VALUES (?, ?, ?)", (profile_id, profile['name'], url))
-            c.execute("UPDATE profile SET location = ?, title = ?, company = ?, description = ?, updated_at = CURRENT_TIMESTAMP WHERE profile_id = ?",
-                (profile['location'], profile['title'], profile['company'], profile['description'], profile_id,))
+            c.execute("UPDATE profile SET name = ?, url = ?, location = ?, title = ?, company = ?, description = ?, updated_at = CURRENT_TIMESTAMP WHERE profile_id = ?",
+                (profile['name'], url, profile['location'], profile['title'], profile['company'], profile['description'], profile_id,))
             self.conn.commit()
             print 'profile %d - %s: profile %s' % (profile_id, profile['name'], 'updated' if description_changed else 'added')
         c.close()
 
 
     def _delay(self):
-        delay = random.randrange(5,30,1)
+        delay = random.randrange(1,15,1)
         print 'waiting %d seconds...' % delay
         time.sleep(delay) # random delay
 
