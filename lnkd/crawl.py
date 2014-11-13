@@ -11,7 +11,7 @@ from bs4 import BeautifulSoup
 
 cookie_filename = "parser.cookies.txt"
 
-class LinkedInParser(object):
+class LinkedInCrawler(object):
 
     def __init__(self, login, password):
         """ Start up... """
@@ -158,4 +158,4 @@ class LinkedInParser(object):
         print 'successes: %d, changes: %d, failures %d' % (successes, changes, failures)
         c.close()
 
-parser = LinkedInParser(config.LINKEDIN_EMAIL, config.LINKEDIN_PASSWORD)
+parser = LinkedInCrawler(config.LINKEDIN_EMAIL, config.LINKEDIN_PASSWORD)
