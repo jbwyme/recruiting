@@ -1,1 +1,2 @@
 beautifulsoup4==4.3.2
+python-oauth2==0.7.0

@@ -184,31 +184,27 @@ class LinkedInCrawler(object):
                 profile['title'] = current_position.select('header h4')[0].get_text()
                 profile['company'] = current_position.select('header h4')[0].nextSibling()[0].get_text()
                 description_el = current_position.select('.description')
-                if len(description_el) == 0:
-                    # no description provided for the current position
-                    profile['description'] = ''
-                else:
-                    profile['description'] = current_position.select('.description')[0].get_text()
+                profile['description'] = '' if len(description_el) == 0 else profile['description'] = current_position.select('.description')[0].get_text()
 
-                    # compare to last run
-                    c.execute('SELECT * FROM profile WHERE profile_id = ?', (profile_id,))
-                    saved_profile = c.fetchone()
-                    description_changed = saved_profile is not None and saved_profile['description'] != profile['description']
+                # compare to last run
+                c.execute('SELECT * FROM profile WHERE profile_id = ?', (profile_id,))
+                saved_profile = c.fetchone()
+                description_changed = saved_profile is not None and saved_profile['description'] != profile['description']
 
-                    # e-mail if the description changed
-                    if description_changed:
-                        self._sendMail("Job description changed for %s" % profile['name'].encode('utf-8'),
-                            'url: %s\n\nold:\n---------\n%s\n\nnew:\n---------\n%s' % (url, saved_profile['description'].encode('utf-8'), profile['description'].encode('utf-8')))
+                # e-mail if the description changed
+                if description_changed:
+                    self._sendMail("Job description changed for %s" % profile['name'].encode('utf-8'),
+                        'url: %s\n\nold:\n---------\n%s\n\nnew:\n---------\n%s' % (url, saved_profile['description'].encode('utf-8'), profile['description'].encode('utf-8')))
 
-                    # save profile to db
-                    if saved_profile is None or description_changed:
-                        c.execute("INSERT OR IGNORE INTO profile (profile_id, name, url) VALUES (?, ?, ?)", (profile_id, profile['name'], url))
-                        c.execute("UPDATE profile SET name = ?, url = ?, location = ?, title = ?, company = ?, description = ?, updated_at = CURRENT_TIMESTAMP WHERE profile_id = ?",
-                            (profile['name'], url, profile['location'], profile['title'], profile['company'], profile['description'], profile_id,))
-                        print 'profile %d - %s: profile %s' % (profile_id, profile['name'], 'updated' if description_changed else 'added')
+                # save profile to db
+                if saved_profile is None or description_changed:
+                    c.execute("INSERT OR IGNORE INTO profile (profile_id, name, url) VALUES (?, ?, ?)", (profile_id, profile['name'], url))
+                    c.execute("UPDATE profile SET name = ?, url = ?, location = ?, title = ?, company = ?, description = ?, updated_at = CURRENT_TIMESTAMP WHERE profile_id = ?",
+                        (profile['name'], url, profile['location'], profile['title'], profile['company'], profile['description'], profile_id,))
+                    print 'profile %d - %s: profile %s' % (profile_id, profile['name'], 'updated' if description_changed else 'added')
 
-                    c.execute("UPDATE profile SET last_crawled_at = CURRENT_TIMESTAMP WHERE profile_id = ?", (profile_id,))
-                    self.conn.commit()
+                c.execute("UPDATE profile SET last_crawled_at = CURRENT_TIMESTAMP WHERE profile_id = ?", (profile_id,))
+                self.conn.commit()
         except IndexError:
             print html
             raise
