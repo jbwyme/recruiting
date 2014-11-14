@@ -20,8 +20,8 @@ DB_NAME = 'lnkd.db'
 class LinkedInCrawler(object):
 
     def __init__(self):
-        self.debug = False
-        self.crawls_per_run = 100
+        self.debug = True
+        self.crawls_per_run = 60
         self.all_profile_ids = []
         self.cred_queue = []
 
@@ -230,7 +230,7 @@ class LinkedInCrawler(object):
 
 
     def _delay(self):
-        delay = random.randrange(2,10,1)
+        delay = random.randrange(40,80,5)
         if self.debug:
             print 'waiting %d seconds...' % delay
         time.sleep(delay) # random delay
