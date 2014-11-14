@@ -22,8 +22,8 @@ print QUEUE_FILE
 class LinkedInCrawler(object):
 
     def __init__(self):
-        self.debug = True
-        self.crawls_per_run = 2
+        self.debug = False
+        self.crawls_per_run = 100
         self.all_profile_ids = []
         self.cred_queue = []
 
