@@ -12,26 +12,33 @@ import time
 import urllib
 import urllib2
 
+CUR_DIR = os.path.dirname(os.path.realpath(__file__))
+LOCK_FILE = '%s/%s' % (CUR_DIR, '.crawl.lck')
+QUEUE_FILE = '%s/%s' % (CUR_DIR, 'queue')
+DB_NAME = 'lnkd.db'
+
+print LOCK_FILE
+print QUEUE_FILE
 class LinkedInCrawler(object):
 
     def __init__(self):
-        self.debug = False
-        self.crawls_per_run = 100
+        self.debug = True
+        self.crawls_per_run = 2
         self.all_profile_ids = []
         self.cred_queue = []
 
         # lock and grab top n profiles to crawl
-        if not os.path.isfile('.crawl.lck'):
-            with open('.crawl.lck', 'a'):
-                os.utime('.crawl.lck', None)
-        lock_file = open(".crawl.lck","r")
+        if not os.path.isfile(LOCK_FILE):
+            with open(LOCK_FILE, 'a'):
+                os.utime(LOCK_FILE, None)
+        lock_file = open(LOCK_FILE, 'r')
         try:
             fcntl.flock(lock_file.fileno(),fcntl.LOCK_EX)
-            if os.path.isfile('queue'):
-                os.rename('queue', 'queue.old')
-                with open('queue.old', 'r') as f:
+            if os.path.isfile(QUEUE_FILE):
+                os.rename(QUEUE_FILE, QUEUE_FILE + '.old')
+                with open(QUEUE_FILE + '.old', 'r') as f:
                     line_num = 0
-                    with open('queue', 'w+') as f2:
+                    with open(QUEUE_FILE, 'w+') as f2:
                         for line in f.readlines():
                             if line_num < self.crawls_per_run: # grab first n rows to crawl during this run
                                 self.cred_queue.append(line.strip())
@@ -39,19 +46,19 @@ class LinkedInCrawler(object):
                                 f2.write(line)
                             self.all_profile_ids.append(int(re.search('id=([0-9]+)', line).group(1)))
                             line_num += 1
-                os.remove('queue.old')
+                os.remove(QUEUE_FILE + '.old')
         except:
-            if os.path.isfile('queue'):
-                os.remove('queue')
-            if os.path.isfile('queue.old'):
-                os.rename('queue.old', 'queue')
+            if os.path.isfile(QUEUE_FILE):
+                os.remove(QUEUE_FILE)
+            if os.path.isfile(QUEUE_FILE + '.old'):
+                os.rename(QUEUE_FILE + '.old', QUEUE_FILE)
             raise
         finally:
             lock_file.close()
 
         try:
             # SQLite
-            self.conn = sqlite3.connect('lnkd.db')
+            self.conn = sqlite3.connect(DB_NAME)
             self.conn.row_factory = sqlite3.Row
             c = self.conn.cursor()
             c.execute('''CREATE TABLE IF NOT EXISTS profile
@@ -80,14 +87,14 @@ class LinkedInCrawler(object):
             if self.debug:
                 print '%d profiles have been queued for crawling' % len(self.cred_queue)
             for cred in self.cred_queue[:]:
-                with open('queue', 'a+') as f:
+                with open(QUEUE_FILE, 'a+') as f:
                     f.write(cred + '\n')
                 self.cred_queue.remove(cred)
                 self.crawlProfile(cred)
         except:
             print 'writing pending buffer (%d profiles) to persistent queue' % len(self.cred_queue)
             for cred in self.cred_queue:
-                with open('queue', 'a+') as f:
+                with open(QUEUE_FILE, 'a+') as f:
                     f.write(cred + '\n')
             raise
         finally:
@@ -140,7 +147,7 @@ class LinkedInCrawler(object):
                 if profile_id not in self.all_profile_ids:
                     cred = 'id=%s&authType=%s&authToken=%s' % (profile_id, authType, authToken)
                     self.all_profile_ids.append(profile_id)
-                    with open('queue', 'a+') as f:
+                    with open(QUEUE_FILE, 'a+') as f:
                         f.write(cred + '\n')
                     if self.debug:
                         print 'adding profile to crawl: %s' % cred
@@ -225,4 +232,4 @@ class LinkedInCrawler(object):
             print 'waiting %d seconds...' % delay
         time.sleep(delay) # random delay
 
-parser = LinkedInCrawler()
+LinkedInCrawler()
