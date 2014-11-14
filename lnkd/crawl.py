@@ -17,8 +17,6 @@ LOCK_FILE = '%s/%s' % (CUR_DIR, '.crawl.lck')
 QUEUE_FILE = '%s/%s' % (CUR_DIR, 'queue')
 DB_NAME = 'lnkd.db'
 
-print LOCK_FILE
-print QUEUE_FILE
 class LinkedInCrawler(object):
 
     def __init__(self):
