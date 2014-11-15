@@ -1,6 +1,7 @@
 from bs4 import BeautifulSoup
 import config
 import cookielib
+from decaptcher import Decaptcher
 import fcntl
 import os
 import random
@@ -21,7 +22,7 @@ class LinkedInCrawler(object):
 
     def __init__(self):
         self.debug = True
-        self.crawls_per_run = 60
+        self.crawls_per_run = 10
         self.all_profile_ids = []
         self.cred_queue = []
 
@@ -56,7 +57,7 @@ class LinkedInCrawler(object):
 
         try:
             # SQLite
-            self.conn = sqlite3.connect(DB_NAME)
+            self.conn = sqlite3.connect(CUR_DIR + '/' + DB_NAME)
             self.conn.row_factory = sqlite3.Row
             c = self.conn.cursor()
             c.execute('''CREATE TABLE IF NOT EXISTS profile
@@ -79,16 +80,17 @@ class LinkedInCrawler(object):
             ]
 
             # login to linkedin
-            self.login()
-
-            # crawl queued batch
-            if self.debug:
-                print '%d profiles have been queued for crawling' % len(self.cred_queue)
-            for cred in self.cred_queue[:]:
-                with open(QUEUE_FILE, 'a+') as f:
-                    f.write(cred + '\n')
-                self.cred_queue.remove(cred)
-                self.crawlProfile(cred)
+            if self.login():
+                # crawl queued batch
+                if self.debug:
+                    print '%d profiles have been queued for crawling' % len(self.cred_queue)
+                for cred in self.cred_queue[:]:
+                    with open(QUEUE_FILE, 'a+') as f:
+                        f.write(cred + '\n')
+                    self.cred_queue.remove(cred)
+                    self.crawlProfile(cred)
+            else:
+                print "unable to login"
         except:
             print 'writing pending buffer (%d profiles) to persistent queue' % len(self.cred_queue)
             for cred in self.cred_queue:
@@ -100,26 +102,73 @@ class LinkedInCrawler(object):
 
 
     def login(self):
+        username, password = random.choice(config.LINKEDIN_ACCOUNTS)
+        print "%s, %s" % (username, password)
         html = self._loadPage("https://www.linkedin.com/")
         soup = BeautifulSoup(html)
         csrf = soup.find(id="loginCsrfParam-login")['value']
         login_data = urllib.urlencode({
-            'session_key': config.LINKEDIN_EMAIL,
-            'session_password': config.LINKEDIN_PASSWORD,
+            'session_key': username,
+            'session_password': password,
             'loginCsrfParam': csrf,
         })
         html = self._loadPage("https://www.linkedin.com/uas/login-submit", login_data)
         soup = BeautifulSoup(html)
-        if soup.find(id='verification-code') is not None:
+        if 'Welcome!' in soup.title.string:
+            return True
+        if soup.find(id='security-challenge-id-captcha') is not None:
+            print soup.title.string
+            if self.debug:
+                print "Needs captcha solve"
+            iframe_html = self._loadPage(soup.find('iframe')['src'])
+            iframe_soup = BeautifulSoup(iframe_html)
+            image_src = 'https://www.google.com/recaptcha/api/%s' % iframe_soup.find('img')['src']
+            urllib.urlretrieve(image_src, 'captcha.jpg')
+            d = Decaptcher(config.DECAPTCHER_USERNAME, config.DECAPTCHER_PASSWORD)
+            if self.debug:
+                print "Solving with decaptcher - balance: %s" % d.get_balance()
+            solution = d.solve_image('captcha.jpg')
+            post_data = {
+                'recaptcha_response_field': solution,
+            }
+            for hi in iframe_soup.find('form').select('input[type=hidden]'):
+                post_data[hi['name']] = hi['value']
+            captcha_data = urllib.urlencode(post_data)
+            captcha_res = self._loadPage(soup.find('iframe')['src'], captcha_data)
+            captcha_res_soup = BeautifulSoup(captcha_res)
+            code = captcha_res_soup.find('textarea').get_text()
+            post_data = {
+                'recaptcha_challenge_field': code
+            }
+            for hi in soup.find('form').select('input[type=hidden]'):
+                post_data[hi['name']] = hi['value']
+            html = self._loadPage('https://www.linkedin.com/uas/captcha-submit', urllib.urlencode(post_data))
+            soup = BeautifulSoup(html)
+            if 'Welcome!' in soup.title.string:
+                print "Captcha solved!"
+                return True
+            else:
+                print "Captcha not solved :("
+                print soup.title.string
+                print html
+                return False
+        elif soup.find(id='verification-code') is not None:
             post_data = {}
             form = soup.find('form')
             for hi in form.select('input[type=hidden]'):
                 post_data[hi['name']] = hi['value']
-            self._sendMail("LinkedIn is asking for verification code", "you should probably stop your crons")
+            #self._sendMail("LinkedIn is asking for verification code", "you should probably stop your crons")
             code = raw_input("Please enter your verification code: ")
             post_data['PinVerificationForm_pinParam'] = code
             verification_data = urllib.urlencode(post_data)
             html = self._loadPage("https://www.linkedin.com/uas/ato-pin-challenge-submit", verification_data)
+            soup = BeautifulSoup(html)
+            if 'Welcome' in soup.title.string:
+                return True
+            else:
+                print "Still not logged in"
+                print html
+                return False
 
 
     def crawlProfile(self, cred=None):
@@ -173,18 +222,21 @@ class LinkedInCrawler(object):
         profile = {}
         try:
             profile['url'] = unicode(url, 'utf-8')
-            profile['name'] = soup.select('.full-name')[0].get_text()
+            name_el = soup.select('.full-name')
             current_positions = soup.select('.background-experience div.current-position')
-            if len(current_positions) == 0:
-                print 'profile %d - %s: Unable to find any current positions... profile may not be viewable: %s' % (profile_id, profile['name'], url)
+            if len(name_el) == 0:
+                print 'profile %d: Unable to get name... probably can\'t access profile'
+            elif len(current_positions) == 0:
+                print 'profile %d: Unable to find any current positions... profile may not be viewable: %s' % url
             else:
                 # parse current position information
                 current_position = current_positions[0]
+                profile['name'] = name_el[0].get_text()
                 profile['location'] = soup.select('#location .locality')[0].get_text()
                 profile['title'] = current_position.select('header h4')[0].get_text()
                 profile['company'] = current_position.select('header h4')[0].nextSibling()[0].get_text()
                 description_el = current_position.select('.description')
-                profile['description'] = '' if len(description_el) == 0 else profile['description'] = current_position.select('.description')[0].get_text()
+                profile['description'] = '' if len(description_el) == 0 else current_position.select('.description')[0].get_text()
 
                 # compare to last run
                 c.execute('SELECT * FROM profile WHERE profile_id = ?', (profile_id,))
@@ -226,7 +278,7 @@ class LinkedInCrawler(object):
 
 
     def _delay(self):
-        delay = random.randrange(40,80,5)
+        delay = random.randrange(1,10,1)
         if self.debug:
             print 'waiting %d seconds...' % delay
         time.sleep(delay) # random delay
