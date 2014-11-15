@@ -157,7 +157,7 @@ class LinkedInCrawler(object):
             form = soup.find('form')
             for hi in form.select('input[type=hidden]'):
                 post_data[hi['name']] = hi['value']
-            #self._sendMail("LinkedIn is asking for verification code", "you should probably stop your crons")
+            self._sendMail("LinkedIn is asking for verification code", "you should probably stop your crons")
             code = raw_input("Please enter your verification code: ")
             post_data['PinVerificationForm_pinParam'] = code
             verification_data = urllib.urlencode(post_data)
