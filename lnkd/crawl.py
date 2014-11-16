@@ -3,6 +3,7 @@ import config
 import cookielib
 from decaptcher import Decaptcher
 import fcntl
+from mixpanel import Mixpanel
 import os
 import random
 import re
@@ -22,9 +23,13 @@ class LinkedInCrawler(object):
 
     def __init__(self):
         self.debug = True
-        self.crawls_per_run = 10
+        self.crawls_per_run = 400
         self.all_profile_ids = []
         self.cred_queue = []
+        self.mixpanel = Mixpanel('0abefb20773a18e33f4ded78f5f6613b')
+        self.linkedin_username, self.linkedin_password = random.choice(config.LINKEDIN_ACCOUNTS)
+        self.started = time.time()
+        self._track('Crawl started')
 
         # lock and grab top n profiles to crawl
         if not os.path.isfile(LOCK_FILE):
@@ -81,6 +86,7 @@ class LinkedInCrawler(object):
 
             # login to linkedin
             if self.login():
+                self._track('Login success')
                 # crawl queued batch
                 if self.debug:
                     print '%d profiles have been queued for crawling' % len(self.cred_queue)
@@ -90,26 +96,31 @@ class LinkedInCrawler(object):
                     self.cred_queue.remove(cred)
                     self.crawlProfile(cred)
             else:
+                self._track('Login failure')
                 print "unable to login"
-        except:
-            print 'writing pending buffer (%d profiles) to persistent queue' % len(self.cred_queue)
-            for cred in self.cred_queue:
-                with open(QUEUE_FILE, 'a+') as f:
-                    f.write(cred + '\n')
+        except Exception as e:
+            self._track('Exception', {'Profiles in queue': len(self.cred_queue), 'message': str(e)})
             raise
         finally:
+            # if there is anything left in the queue, write it out to the queue file
+            if len(self.cred_queue) > 0:
+                print 'writing pending buffer (%d profiles) to persistent queue' % len(self.cred_queue)
+                for cred in self.cred_queue:
+                    with open(QUEUE_FILE, 'a+') as f:
+                        f.write(cred + '\n')
+            self._track('Crawl finished', {'run time (seconds)': int(time.time() - self.started)})
             self.conn.close()
 
 
     def login(self):
-        username, password = random.choice(config.LINKEDIN_ACCOUNTS)
-        print "%s, %s" % (username, password)
+        if self.debug:
+            print "%s, %s" % (self.linkedin_username, self.linkedin_password)
         html = self._loadPage("https://www.linkedin.com/")
         soup = BeautifulSoup(html)
         csrf = soup.find(id="loginCsrfParam-login")['value']
         login_data = urllib.urlencode({
-            'session_key': username,
-            'session_password': password,
+            'session_key': self.linkedin_username,
+            'session_password': self.linkedin_password,
             'loginCsrfParam': csrf,
         })
         html = self._loadPage("https://www.linkedin.com/uas/login-submit", login_data)
@@ -117,7 +128,6 @@ class LinkedInCrawler(object):
         if 'Welcome!' in soup.title.string:
             return True
         if soup.find(id='security-challenge-id-captcha') is not None:
-            print soup.title.string
             if self.debug:
                 print "Needs captcha solve"
             iframe_html = self._loadPage(soup.find('iframe')['src'])
@@ -127,6 +137,7 @@ class LinkedInCrawler(object):
             d = Decaptcher(config.DECAPTCHER_USERNAME, config.DECAPTCHER_PASSWORD)
             if self.debug:
                 print "Solving with decaptcher - balance: %s" % d.get_balance()
+            self._track('Captcha presented', {'balance': d.get_balance()})
             solution = d.solve_image('captcha.jpg')
             post_data = {
                 'recaptcha_response_field': solution,
@@ -146,17 +157,20 @@ class LinkedInCrawler(object):
             soup = BeautifulSoup(html)
             if 'Welcome!' in soup.title.string:
                 print "Captcha solved!"
+                self._track('Captcha solved')
                 return True
             else:
                 print "Captcha not solved :("
                 print soup.title.string
                 print html
+                self._track('Captcha unsolved')
                 return False
         elif soup.find(id='verification-code') is not None:
             post_data = {}
             form = soup.find('form')
             for hi in form.select('input[type=hidden]'):
                 post_data[hi['name']] = hi['value']
+            self._track('Verification code required')
             self._sendMail("LinkedIn is asking for verification code", "you should probably stop your crons")
             code = raw_input("Please enter your verification code: ")
             post_data['PinVerificationForm_pinParam'] = code
@@ -176,6 +190,7 @@ class LinkedInCrawler(object):
         if self.debug:
             print 'crawling "%s"' % url
         profile_id = int(re.search('id=([0-9]+)', url).group(1))
+        self._track('Profile crawled started', {'profile_id': profile_id, 'url': url})
         html = self._loadPage(url)
         self._saveProfile(profile_id, url, html)
         soup = BeautifulSoup(html)
@@ -196,24 +211,17 @@ class LinkedInCrawler(object):
                     self.all_profile_ids.append(profile_id)
                     with open(QUEUE_FILE, 'a+') as f:
                         f.write(cred + '\n')
+                    self._track('Profile discovered', {'profile_id': profile_id, 'cred': cred})
                     if self.debug:
                         print 'adding profile to crawl: %s' % cred
         self._delay()
 
-    def _loadPage(self, url, data=None, retry_num=0):
-        try:
-            if data is not None:
-                response = self.opener.open(url, data)
-            else:
-                response = self.opener.open(url)
-            return ''.join(response.readlines())
-        except Exception as e:
-            if retry_num < 3:
-                print 'retrying loadPage...'
-                return self._loadPage(url, data, retry_num + 1)
-            else:
-                print 'Unable to load url "%s" after 3 tries' % url
-                raise
+    def _loadPage(self, url, data=None):
+        if data is not None:
+            response = self.opener.open(url, data)
+        else:
+            response = self.opener.open(url)
+        return ''.join(response.readlines())
 
 
     def _saveProfile(self, profile_id, url, html):
@@ -224,10 +232,16 @@ class LinkedInCrawler(object):
             profile['url'] = unicode(url, 'utf-8')
             name_el = soup.select('.full-name')
             current_positions = soup.select('.background-experience div.current-position')
-            if len(name_el) == 0:
-                print 'profile %d: Unable to get name... probably can\'t access profile'
+            if soup.find(id='pagekey-nprofile-out-of-network') is not None:
+                print 'profile %d: Out of network' % profile_id
+                self._track('Profile inaccessible', {'reason': '"#pagekey-nprofile-out-of-network" found', 'profile_id': profile_id, 'url': url})
+            elif len(name_el) == 0:
+                print 'profile %d: Unable to get name... probably can\'t access profile but seems to be in network' % profile_id
+                print html
+                self._track('Profile inaccessible', {'reason': '".full-name" not found', 'profile_id': profile_id, 'url': url})
             elif len(current_positions) == 0:
-                print 'profile %d: Unable to find any current positions... profile may not be viewable: %s' % url
+                print 'profile %d: Unable to find any current positions... profile may not be viewable: %s' % (profile_id, url)
+                self._track('Profile inaccessible', {'reason': '".current-positions" not found', 'profile_id': profile_id, 'url': url})
             else:
                 # parse current position information
                 current_position = current_positions[0]
@@ -245,15 +259,17 @@ class LinkedInCrawler(object):
 
                 # e-mail if the description changed
                 if description_changed:
+                    self._track('Description change found', {'profile_id': profile_id, 'url': url})
                     self._sendMail("Job description changed for %s" % profile['name'].encode('utf-8'),
                         'url: %s\n\nold:\n---------\n%s\n\nnew:\n---------\n%s' % (url, saved_profile['description'].encode('utf-8'), profile['description'].encode('utf-8')))
 
                 # save profile to db
                 if saved_profile is None or description_changed:
+                    self._track('Profile added', {'profile_id': profile_id, 'url': url})
                     c.execute("INSERT OR IGNORE INTO profile (profile_id, name, url) VALUES (?, ?, ?)", (profile_id, profile['name'], url))
                     c.execute("UPDATE profile SET name = ?, url = ?, location = ?, title = ?, company = ?, description = ?, updated_at = CURRENT_TIMESTAMP WHERE profile_id = ?",
                         (profile['name'], url, profile['location'], profile['title'], profile['company'], profile['description'], profile_id,))
-                    print 'profile %d - %s: profile %s' % (profile_id, profile['name'], 'updated' if description_changed else 'added')
+                    print 'profile %d - %s: profile %s' % (profile_id, profile['name'].encode('utf-8'), 'updated' if description_changed else 'added')
 
                 c.execute("UPDATE profile SET last_crawled_at = CURRENT_TIMESTAMP WHERE profile_id = ?", (profile_id,))
                 self.conn.commit()
@@ -283,4 +299,14 @@ class LinkedInCrawler(object):
             print 'waiting %d seconds...' % delay
         time.sleep(delay) # random delay
 
-LinkedInCrawler()
+    def _track(self, event, properties={}):
+        _props = {
+            'LinkedIn Account': self.linkedin_username,
+        }
+        _props.update(properties)
+        self.mixpanel.track(urllib2.urlopen('http://ip.42.pl/raw').read(), event, _props)
+try:
+    LinkedInCrawler()
+except Exception as e:
+    print 'CAUGHT THE ERROR'
+    raise
