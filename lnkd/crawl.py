@@ -1,6 +1,7 @@
 from bs4 import BeautifulSoup
 import config
 import cookielib
+from datetime import datetime
 from decaptcher import Decaptcher
 import fcntl
 from mixpanel import Mixpanel
@@ -23,14 +24,18 @@ class LinkedInCrawler(object):
 
     def __init__(self):
         self.debug = True
-        self.crawls_per_run = 400
+        self.crawls_per_run = 200
         self.all_profile_ids = []
         self.cred_queue = []
         self.mixpanel = Mixpanel('0abefb20773a18e33f4ded78f5f6613b')
-        self.linkedin_username, self.linkedin_password = random.choice(config.LINKEDIN_ACCOUNTS)
+        hour_intervals = 24 / len(config.LINKEDIN_USERS)
+        user = config.LINKEDIN_USERS[datetime.now().hour / hour_intervals]
+        self.linkedin_username = '%s@mailnesia.com' % user
+        self.linkedin_password = user
+        #self.linkedin_username, self.linkedin_password = config.LINKEDIN_ACCOUNTS[datetime.now().hour / hour_intervals] 
         self.started = time.time()
         self._track('Crawl started')
-
+        
         # lock and grab top n profiles to crawl
         if not os.path.isfile(LOCK_FILE):
             with open(LOCK_FILE, 'a'):
@@ -130,41 +135,7 @@ class LinkedInCrawler(object):
         if soup.find(id='security-challenge-id-captcha') is not None:
             if self.debug:
                 print "Needs captcha solve"
-            iframe_html = self._loadPage(soup.find('iframe')['src'])
-            iframe_soup = BeautifulSoup(iframe_html)
-            image_src = 'https://www.google.com/recaptcha/api/%s' % iframe_soup.find('img')['src']
-            urllib.urlretrieve(image_src, 'captcha.jpg')
-            d = Decaptcher(config.DECAPTCHER_USERNAME, config.DECAPTCHER_PASSWORD)
-            if self.debug:
-                print "Solving with decaptcher - balance: %s" % d.get_balance()
-            self._track('Captcha presented', {'balance': d.get_balance()})
-            solution = d.solve_image('captcha.jpg')
-            post_data = {
-                'recaptcha_response_field': solution,
-            }
-            for hi in iframe_soup.find('form').select('input[type=hidden]'):
-                post_data[hi['name']] = hi['value']
-            captcha_data = urllib.urlencode(post_data)
-            captcha_res = self._loadPage(soup.find('iframe')['src'], captcha_data)
-            captcha_res_soup = BeautifulSoup(captcha_res)
-            code = captcha_res_soup.find('textarea').get_text()
-            post_data = {
-                'recaptcha_challenge_field': code
-            }
-            for hi in soup.find('form').select('input[type=hidden]'):
-                post_data[hi['name']] = hi['value']
-            html = self._loadPage('https://www.linkedin.com/uas/captcha-submit', urllib.urlencode(post_data))
-            soup = BeautifulSoup(html)
-            if 'Welcome!' in soup.title.string:
-                print "Captcha solved!"
-                self._track('Captcha solved')
-                return True
-            else:
-                print "Captcha not solved :("
-                print soup.title.string
-                print html
-                self._track('Captcha unsolved')
-                return False
+                return self._solveRecaptcha(html)
         elif soup.find(id='verification-code') is not None:
             post_data = {}
             form = soup.find('form')
@@ -183,6 +154,8 @@ class LinkedInCrawler(object):
                 print "Still not logged in"
                 print html
                 return False
+        else:
+            print html
 
 
     def crawlProfile(self, cred=None):
@@ -192,8 +165,16 @@ class LinkedInCrawler(object):
         profile_id = int(re.search('id=([0-9]+)', url).group(1))
         self._track('Profile crawled started', {'profile_id': profile_id, 'url': url})
         html = self._loadPage(url)
-        self._saveProfile(profile_id, url, html)
         soup = BeautifulSoup(html)
+        if 'Sign In' in soup.title.string:
+            if self.debug is True:
+                print 'Got login page while crawling profile. Attempting login...'
+                if self.login():
+                    print 'Re-authentication successful!'
+                else:
+                    raise Exception('Login page shown but login failed')
+
+        self._saveProfile(profile_id, url, html)
         discovery_results = soup.find(class_='discovery-results')
         if len(self.all_profile_ids) <= 10000 and discovery_results is not None:
             similar_profiles = [a['href'] for a in discovery_results.findAll('a') if '/profile/view' in a['href']]
@@ -214,13 +195,14 @@ class LinkedInCrawler(object):
                     self._track('Profile discovered', {'profile_id': profile_id, 'cred': cred})
                     if self.debug:
                         print 'adding profile to crawl: %s' % cred
-        self._delay()
 
     def _loadPage(self, url, data=None):
+        self._track('_loadPage')
         if data is not None:
             response = self.opener.open(url, data)
         else:
             response = self.opener.open(url)
+        self._delay()
         return ''.join(response.readlines())
 
 
@@ -294,7 +276,7 @@ class LinkedInCrawler(object):
 
 
     def _delay(self):
-        delay = random.randrange(1,10,1)
+        delay = random.randrange(2,20,1)
         if self.debug:
             print 'waiting %d seconds...' % delay
         time.sleep(delay) # random delay
@@ -305,8 +287,73 @@ class LinkedInCrawler(object):
         }
         _props.update(properties)
         self.mixpanel.track(urllib2.urlopen('http://ip.42.pl/raw').read(), event, _props)
-try:
-    LinkedInCrawler()
-except Exception as e:
-    print 'CAUGHT THE ERROR'
-    raise
+
+    def _solveRecaptcha(self, html):
+        soup = BeautifulSoup(html)
+        iframe_html = self._loadPage(soup.find('iframe')['src'])
+        iframe_soup = BeautifulSoup(iframe_html)
+        image_src = 'https://www.google.com/recaptcha/api/%s' % iframe_soup.find('img')['src']
+        urllib.urlretrieve(image_src, 'captcha.jpg')
+        d = Decaptcher(config.DECAPTCHER_USERNAME, config.DECAPTCHER_PASSWORD)
+        if self.debug:
+            print "Solving with decaptcher - balance: %s" % d.get_balance()
+        self._track('Captcha presented', {'balance': d.get_balance()})
+        solution = d.solve_image('captcha.jpg')
+        post_data = {
+            'recaptcha_response_field': solution,
+        }
+        for hi in iframe_soup.find('form').select('input[type=hidden]'):
+            post_data[hi['name']] = hi['value']
+        captcha_data = urllib.urlencode(post_data)
+        captcha_res = self._loadPage(soup.find('iframe')['src'], captcha_data)
+        captcha_res_soup = BeautifulSoup(captcha_res)
+        code = captcha_res_soup.find('textarea').get_text()
+        post_data = {
+            'recaptcha_challenge_field': code
+        }
+        for hi in soup.find('form').select('input[type=hidden]'):
+            post_data[hi['name']] = hi['value']
+        print 'calling https://www.linkedin.com%s' % soup.find('form')['action']
+        html = self._loadPage('https://www.linkedin.com%s' % soup.find('form')['action'], urllib.urlencode(post_data))
+        soup = BeautifulSoup(html)
+        if 'Welcome!' in soup.title.string:
+            print "Captcha solved!"
+            self._track('Captcha solved')
+            return True
+        else:
+            print "Captcha not solved :("
+            print soup.title.string
+            print html
+            self._track('Captcha unsolved')
+            return False
+   
+    def register(self, name):
+        first_name, last_name = string.split(name, ' ')
+        username = '%s%s%s' % (first_name, last_name, random.choice(['li', 'jobs', 'work', 'corp']))
+        email = '%s@mailnesia.com' % username
+        html = self._loadPage('https://www.linkedin.com/reg/signup')
+        soup = BeautifulSoup(html)
+        form = soup.find(name='coldRegistrationForm')
+        post_data = {
+            'firstName': first_name,
+            'lastName': last_name,
+            'email': email,
+            'password': username,
+        }
+        for hi in form.select('input[type=hidden]'):
+            post_data[hi['name']] = hi['value']
+        post_data['webmailImport'] = 'false'
+        
+        html = self._loadPage('https://www.linkedin.com%s' % form['action'], urllib.urlencode(post_data))
+        soup = BeautifulSoup(html)
+        import pdb
+        pdb.set_trace()
+        if 'Security Verification' in soup.title.string:
+            if self._solveCaptcha(html):
+                print 'Captcha solved!'
+            else: 
+                print 'Couldnt solve captcha :('
+        
+                    
+
+LinkedInCrawler()
